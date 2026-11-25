@@ -29,8 +29,9 @@ sudo gsb run golang:1.23 -- go version   # ephemeral: create, exec, rm
 Project mode works with a `Sandboxfile` (see `Sandboxfile.example`):
 
 ```sh
-sudo gsb up                 # create every sandbox in ./Sandboxfile
+sudo gsb up                 # create every sandbox in ./Sandboxfile (recreates changed entries)
 sudo gsb script dev test    # run a named script inside "dev"
+sudo gsb script dev test -- -run TestFoo   # extra args are the script's "$@"
 sudo gsb down
 ```
 
@@ -113,8 +114,8 @@ Notes on the design:
 - **Secure defaults.** No network, read-only volumes, `pids=512`,
   `noNewPrivileges`, and a reduced capability set. Image extraction is
   confined to its root with securejoin, which is covered by a test
-  against symlink and `../` escapes. `cp` out of a sandbox never
-  restores owners or device nodes on the host.
+  against symlink, `../` and `x/..` escapes. `cp` out of a sandbox never
+  restores owners, device nodes or setuid/setgid bits on the host.
 
 ## What's verified
 

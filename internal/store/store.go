@@ -38,6 +38,7 @@ type Sandbox struct {
 	UID         uint32           `json:"uid"`
 	GID         uint32           `json:"gid"`
 	Ephemeral   bool             `json:"ephemeral,omitempty"`
+	Fingerprint string           `json:"fingerprint,omitempty"` // of the create options, see sandbox.Options.Fingerprint
 	CreatedAt   time.Time        `json:"createdAt"`
 }
 

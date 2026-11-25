@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -349,7 +350,8 @@ func imagesCmd() *cobra.Command {
 
 func upCmd(ctx context.Context) *cobra.Command {
 	return &cobra.Command{
-		Use: "up [NAME...]", Short: "Create the Sandboxfile's sandboxes (all, or the ones named)",
+		Use:   "up [NAME...]",
+		Short: "Create or start the Sandboxfile's sandboxes; recreate changed ones",
 		RunE: func(_ *cobra.Command, args []string) error {
 			p, err := project.Find()
 			if err != nil {
@@ -360,12 +362,21 @@ func upCmd(ctx context.Context) *cobra.Command {
 			}
 			m := manager()
 			return each(args, func(name string) error {
-				if m.Store.Exists(name) {
-					return m.Start(name)
-				}
 				o, err := p.Options(name)
 				if err != nil {
 					return err
+				}
+				if sb, err := m.Store.Load(name); err == nil {
+					if sb.Fingerprint == o.Fingerprint() {
+						return m.Start(name)
+					}
+					// Like `compose up`: a changed definition means a new
+					// sandbox. Nothing is lost that `stop`/`start` would keep,
+					// because the sandbox filesystem is ephemeral anyway.
+					fmt.Fprintf(os.Stderr, "gsb: %s: Sandboxfile entry changed, recreating\n", name)
+					if err := m.Remove(name); err != nil {
+						return err
+					}
 				}
 				_, err = m.Create(ctx, o)
 				return err
@@ -400,7 +411,7 @@ func scriptCmd() *cobra.Command {
 	var f execFlags
 	c := &cobra.Command{
 		Use:     "script SANDBOX SCRIPT [-- ARGS...]",
-		Short:   "Run a script defined in the Sandboxfile",
+		Short:   "Run a script defined in the Sandboxfile (ARGS are its \"$@\")",
 		Example: "  gsb script dev test\n  gsb script dev test -- -run TestFoo",
 		Args:    cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -416,8 +427,13 @@ func scriptCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("script %q not defined for %s", args[1], args[0])
 			}
-			// sh -c 'script "$@"' gsb args...  passes extra args through.
-			cmd := append([]string{"/bin/sh", "-c", body + ` "$@"`, "gsb"}, args[2:]...)
+			// Extra args become the script's positional parameters; the script
+			// decides where they go ("$@", "$1", ...). Appending them to the
+			// body would send them only to the last command of `a && b`.
+			if len(args) > 2 && !usesArgs.MatchString(body) {
+				return fmt.Errorf("script %q takes no arguments; reference them with \"$@\" in the Sandboxfile", args[1])
+			}
+			cmd := append([]string{"/bin/sh", "-c", body, "gsb-" + args[1]}, args[2:]...)
 			return exitWith(manager().Exec(args[0], f.options(cmd)))
 		},
 	}
@@ -426,6 +442,9 @@ func scriptCmd() *cobra.Command {
 }
 
 // --- helpers ---
+
+// usesArgs matches shell references to positional parameters.
+var usesArgs = regexp.MustCompile(`\$\{?[@*1-9]`)
 
 func each(names []string, fn func(string) error) error {
 	var failed []string

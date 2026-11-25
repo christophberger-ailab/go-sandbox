@@ -1,7 +1,7 @@
 # Copy to "Sandboxfile" in your project root.
 #   gsb up                      create all sandboxes below
 #   gsb exec dev                interactive shell in "dev"
-#   gsb script dev test -- -v   run a script, passing extra args
+#   gsb script dev test -- -v   run a script; extra args are its "$@"
 #   gsb down                    remove them again
 sandboxes:
   dev:
@@ -18,7 +18,7 @@ sandboxes:
       GOCACHE: /tmp/gocache
     scripts:
       build: go build ./...
-      test: go test ./...
+      test: go test ./... "$@"   # gsb script dev test -- -run TestFoo
       vet: go vet ./...
 
   play:                  # locked-down playground: no network, small limits

@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"golang.org/x/sys/unix"
 
 	"github.com/christophberger/go-sandbox/internal/archive"
 )
@@ -37,7 +37,6 @@ type Image struct {
 //	Dir/<digest-hex>/image.json    Image metadata incl. OCI config
 type Store struct {
 	Dir string
-	mu  sync.Mutex
 }
 
 // Get returns a cached image, pulling it if the ref is unknown.
@@ -140,9 +139,18 @@ func (s *Store) index() (map[string]string, error) {
 	return idx, json.Unmarshal(b, &idx)
 }
 
+// setIndex updates index.json under a flock, so concurrent gsb processes
+// (two `gsb pull`s, or `pull` racing `create`) don't drop each other's entries.
 func (s *Store) setIndex(ref, hex string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.Dir, "index.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return err
+	}
+	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 	idx, err := s.index()
 	if err != nil {
 		return err
