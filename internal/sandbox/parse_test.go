@@ -1,6 +1,9 @@
 package sandbox
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestParseMemory(t *testing.T) {
 	for in, want := range map[string]int64{"": 0, "512m": 512 << 20, "2g": 2 << 30, "1.5G": 3 << 29, "4096": 4096} {
@@ -32,6 +35,38 @@ func TestMergeEnv(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestParseMemoryUnits(t *testing.T) {
+	for in, want := range map[string]int64{"512mb": 512 << 20, "512MiB": 512 << 20, "1gb": 1 << 30, "64k": 64 << 10, "100b": 100} {
+		if got, err := ParseMemory(in); err != nil || got != want {
+			t.Errorf("ParseMemory(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"m", "12x", "-1g", "1kmg"} {
+		if _, err := ParseMemory(bad); err == nil {
+			t.Errorf("ParseMemory(%q) accepted", bad)
+		}
+	}
+}
+
+func TestParseVolumeColonInHostPath(t *testing.T) {
+	dir := t.TempDir() + "/a:b"
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v, err := ParseVolume(dir+":/data:rw", "/")
+	if err != nil || v.Host != dir || v.Guest != "/data" || !v.RW {
+		t.Fatalf("got %+v, %v", v, err)
+	}
+	if v, err := ParseVolume(dir+":/data", "/"); err != nil || v.Host != dir || v.RW {
+		t.Fatalf("got %+v, %v", v, err)
+	}
+	for _, bad := range []string{"/tmp", "/tmp:", ":/data", "/tmp:/data:xx"} {
+		if _, err := ParseVolume(bad, "/"); err == nil {
+			t.Errorf("ParseVolume(%q) accepted", bad)
 		}
 	}
 }

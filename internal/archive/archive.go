@@ -37,14 +37,17 @@ func Untar(r io.Reader, root string, preserveOwner bool) error {
 func extractEntry(tr *tar.Reader, hdr *tar.Header, root string, preserveOwner bool) error {
 	// Resolve the parent safely, but never follow the final component:
 	// a symlink entry must be created as a link, not resolved.
-	parent, err := securejoin.SecureJoin(root, filepath.Dir(filepath.Clean("/"+hdr.Name)))
+	// Both parent and base must come from the cleaned name: the base of a
+	// raw name like "x/.." is "..", which would point above root.
+	clean := filepath.Clean("/" + hdr.Name)
+	if clean == "/" {
+		return nil // the root itself
+	}
+	parent, err := securejoin.SecureJoin(root, filepath.Dir(clean))
 	if err != nil {
 		return err
 	}
-	base := filepath.Base(hdr.Name)
-	if base == "/" || base == "." {
-		return nil // the root itself
-	}
+	base := filepath.Base(clean)
 	target := filepath.Join(parent, base)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
@@ -113,7 +116,14 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, root string, preserveOwner bo
 	}
 	if hdr.Typeflag != tar.TypeSymlink {
 		// chmod after chown, because chown clears setuid/setgid bits.
-		return os.Chmod(target, mode&(fs.ModePerm|fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky))
+		// Without preserveOwner (untrusted input such as `gsb cp` out of a
+		// sandbox), files end up owned by the user running gsb, usually
+		// root, so setuid/setgid bits would hand out root: drop them.
+		keep := fs.ModePerm | fs.ModeSticky
+		if preserveOwner {
+			keep |= fs.ModeSetuid | fs.ModeSetgid
+		}
+		return os.Chmod(target, mode&keep)
 	}
 	return nil
 }

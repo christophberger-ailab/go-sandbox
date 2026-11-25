@@ -4,6 +4,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +60,18 @@ type Options struct {
 	Ephemeral   bool
 }
 
+// Fingerprint identifies the options a sandbox was created from, so that
+// `gsb up` can tell when a Sandboxfile entry has changed.
+func (o Options) Fingerprint() string {
+	o.Ephemeral = false
+	if o.Network == "" {
+		o.Network = "none"
+	}
+	b, _ := json.Marshal(o)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
+}
+
 // Create pulls the image (if needed), writes the bundle and starts the sandbox.
 func (m *Manager) Create(ctx context.Context, o Options) (*store.Sandbox, error) {
 	if err := store.ValidateName(o.Name); err != nil {
@@ -97,7 +111,7 @@ func (m *Manager) Create(ctx context.Context, o Options) (*store.Sandbox, error)
 		Network: o.Network, Volumes: o.Volumes,
 		Env:     mergeEnv(cfg.Env, o.Env),
 		Workdir: workdir, UID: uid, GID: gid,
-		Ephemeral: o.Ephemeral, CreatedAt: time.Now(),
+		Ephemeral: o.Ephemeral, Fingerprint: o.Fingerprint(), CreatedAt: time.Now(),
 	}
 	if err := m.Store.Save(sb); err != nil {
 		return nil, err
@@ -115,6 +129,7 @@ func (m *Manager) Create(ctx context.Context, o Options) (*store.Sandbox, error)
 		CgroupsPath: "/gsb/" + o.Name,
 	})
 	if err := writeJSON(filepath.Join(m.Store.Bundle(o.Name), "config.json"), spec); err != nil {
+		m.Store.Delete(o.Name)
 		return nil, err
 	}
 	if err := m.boot(sb); err != nil {
@@ -366,7 +381,14 @@ func (m *Manager) CopyOut(name, guestSrc, hostDir string) error {
 	pr, pw := io.Pipe()
 	var stderr strings.Builder
 	errc := make(chan error, 1)
-	go func() { errc <- archive.Untar(pr, hostDir, false) }() // never trust owners/devices from the sandbox
+	go func() {
+		// Never trust owners, devices or setuid bits from the sandbox.
+		err := archive.Untar(pr, hostDir, false)
+		// On error, keep draining so tar in the sandbox doesn't block on a
+		// full pipe and hang `gsb cp`.
+		io.Copy(io.Discard, pr)
+		errc <- err
+	}()
 	code, err := m.Exec(name, ExecOptions{
 		Args:   []string{"tar", "-c", "-f", "-", "-C", filepath.Dir(guestSrc), filepath.Base(guestSrc)},
 		Stdout: pw, Stderr: &stderr,

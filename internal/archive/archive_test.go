@@ -3,6 +3,7 @@ package archive
 import (
 	"archive/tar"
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,5 +54,87 @@ func TestTarRoundTrip(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dst, "proj", "link"))
 	if err != nil || string(b) != "package main" {
 		t.Fatalf("round trip: %q, %v", b, err)
+	}
+}
+
+func tarOf(t *testing.T, hdrs ...*tar.Header) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, h := range hdrs {
+		if h.Typeflag == tar.TypeReg {
+			h.Size = int64(len(h.Linkname)) // body carried in Linkname for brevity
+			body := h.Linkname
+			h.Linkname = ""
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+			tw.Write([]byte(body))
+			continue
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tw.Close()
+	return &buf
+}
+
+// Regression test: a symlink entry named "x/.." used to replace the
+// directory above root with a symlink, so later entries landed outside.
+func TestUntarDotDotSymlinkEntry(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	os.Mkdir(root, 0o755)
+	sibling := filepath.Join(parent, "keep")
+	os.WriteFile(sibling, []byte("x"), 0o644)
+	elsewhere := t.TempDir()
+
+	buf := tarOf(t,
+		&tar.Header{Name: "x/..", Typeflag: tar.TypeSymlink, Linkname: elsewhere},
+		&tar.Header{Name: "../pwned", Typeflag: tar.TypeReg, Mode: 0o644, Linkname: "y"},
+	)
+	_ = Untar(buf, root, false)
+
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("file next to root was deleted: %v", err)
+	}
+	if fi, err := os.Lstat(parent); err != nil || fi.Mode()&fs.ModeSymlink != 0 {
+		t.Fatalf("directory above root was replaced: %v %v", fi, err)
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Fatalf("write escaped root: %v", entries)
+	}
+}
+
+// Regression test: a directory entry "x/.." used to chmod the directory above root.
+func TestUntarDotDotDirEntry(t *testing.T) {
+	parent := t.TempDir()
+	os.Chmod(parent, 0o700)
+	root := filepath.Join(parent, "root")
+	os.Mkdir(root, 0o755)
+
+	buf := tarOf(t, &tar.Header{Name: "x/..", Typeflag: tar.TypeDir, Mode: 0o777})
+	if err := Untar(buf, root, false); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(parent); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("directory above root was chmodded to %v", fi.Mode().Perm())
+	}
+}
+
+// Untrusted archives must not produce setuid/setgid files.
+func TestUntarDropsSetuidWithoutPreserveOwner(t *testing.T) {
+	root := t.TempDir()
+	buf := tarOf(t, &tar.Header{Name: "sh", Typeflag: tar.TypeReg, Mode: 0o4755 | 0o2000, Linkname: "#!"})
+	if err := Untar(buf, root, false); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(root, "sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&(fs.ModeSetuid|fs.ModeSetgid) != 0 {
+		t.Fatalf("setuid/setgid kept: %v", fi.Mode())
 	}
 }
