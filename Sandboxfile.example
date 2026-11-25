@@ -1,0 +1,33 @@
+# Copy to "Sandboxfile" in your project root.
+#   gsb up                      create all sandboxes below
+#   gsb exec dev                interactive shell in "dev"
+#   gsb script dev test -- -v   run a script, passing extra args
+#   gsb down                    remove them again
+sandboxes:
+  dev:
+    image: golang:1.23
+    cpus: 2
+    memory: 2g
+    pids: 1024
+    network: host        # none (default) | sandbox | host; module downloads need host
+    workdir: /src
+    volumes:
+      - .:/src:rw        # relative to this file; read-only unless :rw
+    env:
+      GOFLAGS: -buildvcs=false
+      GOCACHE: /tmp/gocache
+    scripts:
+      build: go build ./...
+      test: go test ./...
+      vet: go vet ./...
+
+  play:                  # locked-down playground: no network, small limits
+    image: golang:1.23
+    cpus: 1
+    memory: 512m
+    pids: 128
+    workdir: /play
+    volumes:
+      - ./snippets:/play  # read-only
+    scripts:
+      run: go run .
