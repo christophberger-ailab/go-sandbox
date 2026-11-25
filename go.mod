@@ -1,6 +1,6 @@
 module github.com/christophberger/go-sandbox
 
-go 1.26.0
+go 1.27.4
 
 require (
 	github.com/cyphar/filepath-securejoin v0.7.0
